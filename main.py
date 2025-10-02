@@ -234,75 +234,86 @@ if MINER_IP:
 # === Flask UI ===
 app = Flask(__name__)
 
-TEMPLATE = """<!doctype html>
-<html lang="fa" dir="rtl">
+TEMPLATE = """
+<!doctype html>
+<html lang="en" dir="ltr">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>پنل ماینر</title>
+<title>Miner Panel</title>
 <style>
-body{font-family:sans-serif; background:#f0f4f8; color:#0f172a; padding:8px; margin:8px;}
-.card{background:white;border-radius:12px;padding:12px;margin-bottom:10px;box-shadow:0 4px 16px rgba(0,0,0,0.08);}
+body{font-family:sans-serif; background:#f0f4f8; color:#0f172a; padding:5px; margin:5px;}
+.card{background:white;border-radius:12px;padding:10px;margin-bottom:10px;box-shadow:0 4px 16px rgba(0,0,0,0.08);}
 table{width:100%;border-collapse:collapse;margin-top:10px;}
-th,td{padding:6px 4px;text-align:center;font-size:16px;}
+th,td{padding:6px 4px;text-align:center;font-size:18px;}
 th{background:#e0e7ff;color:#1e40af;}
 tr:nth-child(even){background:#f8fafc;}
 .status-online{color:#10b981; font-weight:600; font-size:12px; display:block;}
 .status-offline{color:#dc2626; font-weight:600; font-size:12px; display:block;}
-.button{padding:8px 14px;background:#2563eb;color:white;border:none;border-radius:8px;cursor:pointer;font-weight:600;font-size:14px;}
-.total-hashrate{background:#e0e7ff; padding:8px 12px; border-radius:8px; font-weight:bold; font-size:14px; color:#1e40af;}
+.button{padding:8px 16px;background:#2563eb;color:white;border:none;border-radius:8px;cursor:pointer;font-weight:600;font-size:16px;}
+.button:hover{background:#1e40af;}
 .temp-low{color:#10b981; font-weight:bold;}
 .temp-high{color:#dc2626; font-weight:bold;}
 .temp-container{display:flex; justify-content:center; gap:8px; flex-wrap:wrap;}
-.countdown{font-size:13px;color:#64748b;margin-top:5px;}
-.notice{color:#b45309;background:#fffbeb;padding:8px;border-radius:8px;margin-bottom:10px;}
-@media(max-width:600px){th,td{font-size:14px;padding:6px;}}
+.countdown{font-size:14px;color:#64748b;margin-top:5px;}
+.total-hashrate{background:#e0e7ff; padding:8px 16px; border-radius:8px; font-weight:bold; font-size:16px; color:#1e40af;}
+.control-row{display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; gap:15px;}
+.control-left{display:flex; align-items:center; gap:15px;}
+@media(max-width:600px){th,td{font-size:16px;padding:8px;}}
 </style>
 <script>
 function updateCountdown() {
-    const nextUpdateTime = {{ next_update_timestamp or 0 }} * 1000;
+    const nextUpdateTime = {{ next_update_timestamp }} * 1000;
     const countdownElement = document.getElementById('countdown');
+    
     function update() {
         const now = new Date().getTime();
         const distance = nextUpdateTime - now;
-        if (!nextUpdateTime || distance < 0) {
-            countdownElement.innerHTML = "آخرین وضعیت نمایش داده شده";
+        
+        if (distance < 0) {
+            countdownElement.innerHTML = "Updating...";
+            location.reload();
             return;
         }
+        
         const hours = Math.floor(distance / (1000 * 60 * 60));
         const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
         const seconds = Math.floor((distance % (1000 * 60)) / 1000);
-        countdownElement.innerHTML = `بروزرسانی بعدی در: ${hours}س ${minutes}د ${seconds}ث`;
+        
+        countdownElement.innerHTML = `Next update in: ${hours}h ${minutes}m ${seconds}s`;
     }
+    
     update();
-    setInterval(update, 1000);
+    const countdownInterval = setInterval(update, 1000);
 }
+
 document.addEventListener('DOMContentLoaded', updateCountdown);
 </script>
 </head>
 <body>
 <div class="card">
-{% if not miner_ip %}
-  <div class="notice">متغیر محیطی <strong>MINER_IP</strong> تنظیم نشده — هیچ ماینری پُلی نشده. در Railway > Variables مقدار MINER_IP را قرار دهید.</div>
-{% endif %}
-<p style="font-size:14px;color:#64748b;">آخرین بروزرسانی: {{ last_update or "-" }}</p>
-<div id="countdown" class="countdown">-</div>
+<p style="font-size:16px;color:#64748b;">Last Update: {{ last_update }}</p>
+<div id="countdown" class="countdown">Next update in: --</div>
 
-<div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
-  <form method="POST" action="/">
-    <button type="submit" class="button">بروزرسانی دستی</button>
-  </form>
-  <div class="total-hashrate">کل هش‌ریت: {{ total_hashrate }} TH/s</div>
+<div class="control-row">
+    <div class="control-left">
+        <form method="POST" action="/">
+            <button type="submit" class="button">Manual Update</button>
+        </form>
+        <div class="total-hashrate">
+            Total Hashrate: {{ total_hashrate }} TH/s
+        </div>
+    </div>
 </div>
 
 <table>
 <thead>
 <tr>
-<th>خلاصه</th>
-<th>آپ‌تایم</th>
-<th>دما برد (°C)</th>
-<th>هش‌ریت</th>
-<th>توان (W)</th>
+<th>Summary</th>
+<th>Uptime</th>
+<th>Board Temp (°C)</th>
+<th>Hashrate</th>
+<th>Power (W)</th>
 </tr>
 </thead>
 <tbody>
@@ -311,9 +322,9 @@ document.addEventListener('DOMContentLoaded', updateCountdown);
 <td>
 {{ m.name }}
 {% if m.alive %}
-<span class="status-online">آنلاین</span>
+<span class="status-online">Online</span>
 {% else %}
-<span class="status-offline">آفلاین</span>
+<span class="status-offline">Offline</span>
 {% endif %}
 </td>
 <td>{{ m.uptime or "-" }}</td>
