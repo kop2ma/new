@@ -356,13 +356,18 @@ document.addEventListener('DOMContentLoaded', updateCountdown);
 
 @app.route("/", methods=["GET", "POST"])
 def index():
-    if request.method == "POST":
+    # ✅ این ۲ خط رو اضافه کن:
+    is_cron_job = request.args.get('source') == 'cron'
+    if request.method == "POST" or is_cron_job:
         refresh_all()
+    
+    # بقیه کد مثل قبل...
     with CACHE_LOCK:
         miners = CACHE["miners"]
         last_update = CACHE["last_update"]
         next_update_timestamp = CACHE.get("next_update", None)
         total_hashrate = calculate_total_hashrate(miners)
+    
     return render_template_string(
         TEMPLATE,
         miners=miners,
