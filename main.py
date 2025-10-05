@@ -4,19 +4,13 @@
 import os
 import socket
 import json
-import time
-import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import pytz
 from flask import Flask, render_template_string, request
 
-# === CONFIG (from environment variables) ===
+# === CONFIG ===
 MINER_IP = os.environ.get("MINER_IP")
-MINER_USER = os.environ.get("MINER_USER", "")
-MINER_PASS = os.environ.get("MINER_PASS", "")
-CACHE_INTERVAL = int(os.environ.get("CACHE_INTERVAL_SECONDS", 60 * 60))
-
 MINER_NAMES = ["131", "132", "133", "65", "66", "70"]
 MINER_PORTS = [204, 205, 206, 304, 305, 306]
 
@@ -26,8 +20,6 @@ def build_miners():
     for name, port in zip(MINER_NAMES, MINER_PORTS):
         miners.append({"name": name, "ip": ip, "port": port})
     return miners
-
-MINERS = build_miners() if MINER_IP else []
 
 SOCKET_TIMEOUT = 3.0
 MAX_WORKERS = 6
@@ -164,14 +156,13 @@ def poll_miner(miner):
 
 # === LIVE DATA (no cache) ===
 def get_live_data():
-    global MINERS
-    MINERS = build_miners() if MINER_IP else []
+    miners = build_miners() if MINER_IP else []
     out = []
-    if not MINERS:
+    if not miners:
         return [], "No miners configured", None
     
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
-        futures = {ex.submit(poll_miner, m): m for m in MINERS}
+        futures = {ex.submit(poll_miner, m): m for m in miners}
         for fut in futures:
             try:
                 res = fut.result()
@@ -279,7 +270,7 @@ tr:nth-child(even){background:#f8fafc;}
 <td>{{ m.hashrate or "-" }}</td>
 <td>{{ m.power or "-" }}</td>
 </tr>
-{% for m in miners %}
+{% endfor %}
 </tbody>
 </table>
 </div>
@@ -298,7 +289,6 @@ def index():
         miners=miners,
         last_update=last_update,
         total_hashrate=total_hashrate,
-        miner_ip=MINER_IP,
     )
 
 if __name__ == "__main__":
