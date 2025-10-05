@@ -12,23 +12,14 @@ import pytz
 from flask import Flask, render_template_string, request
 
 # === CONFIG (from environment variables) ===
-# On Railway set these in project > Variables:
-#   MINER_IP     - the shared IP for all miners (no IP in code)
-#   MINER_USER   - username (if your protocol needs it)
-#   MINER_PASS   - password (if your protocol needs it)
-# Optional:
-#   CACHE_INTERVAL_SECONDS - seconds between auto-refresh (default 3600)
-# Railway will provide PORT variable for web binding.
-MINER_IP = os.environ.get("MINER_IP")         # required to be provided by Railway env
+MINER_IP = os.environ.get("MINER_IP")
 MINER_USER = os.environ.get("MINER_USER", "")
 MINER_PASS = os.environ.get("MINER_PASS", "")
 CACHE_INTERVAL = int(os.environ.get("CACHE_INTERVAL_SECONDS", 60 * 60))
 
-# MINER names & ports: ports remain hardcoded as requested
 MINER_NAMES = ["131", "132", "133", "65", "66", "70"]
 MINER_PORTS = [204, 205, 206, 304, 305, 306]
 
-# Build MINERS list at runtime from MINER_IP and the fixed ports
 def build_miners():
     ip = MINER_IP
     miners = []
@@ -36,10 +27,8 @@ def build_miners():
         miners.append({"name": name, "ip": ip, "port": port})
     return miners
 
-# Fallback if MINER_IP not set: keep empty list but UI will show warning
 MINERS = build_miners() if MINER_IP else []
 
-# Other config
 SOCKET_TIMEOUT = 3.0
 MAX_WORKERS = 6
 COMMANDS = [{"command": "summary"}, {"command": "devs"}]
@@ -114,7 +103,6 @@ def parse_summary(summary_json):
     temp = data.get("Temperature")
     hashrate = None
     if mhs_av is not None:
-        # same heuristic as original: if huge, convert to TH/s
         if mhs_av > 1_000_000:
             hashrate = round(mhs_av / 1_000_000, 2)
         else:
@@ -174,28 +162,14 @@ def poll_miner(miner):
         result["board_temps"] = boards
     return result
 
-# === Cache & refresher ===
-CACHE = {"miners": [], "last_update": None, "next_update": None}
-CACHE_LOCK = threading.Lock()
-
-def calculate_total_hashrate(miners):
-    total = 0
-    for miner in miners:
-        if miner.get("alive") and miner.get("hashrate") is not None:
-            total += miner["hashrate"]
-    return round(total, 2)
-
-def refresh_all():
+# === LIVE DATA (no cache) ===
+def get_live_data():
     global MINERS
-    # rebuild miners in case MINER_IP changed in env at runtime
     MINERS = build_miners() if MINER_IP else []
     out = []
     if not MINERS:
-        with CACHE_LOCK:
-            CACHE["miners"] = []
-            CACHE["last_update"] = None
-            CACHE["next_update"] = None
-        return
+        return [], "No miners configured", None
+    
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         futures = {ex.submit(poll_miner, m): m for m in MINERS}
         for fut in futures:
@@ -204,32 +178,19 @@ def refresh_all():
             except Exception:
                 res = {"name": f"{futures[fut]['name']} ({futures[fut]['port']})", "alive": False}
             out.append(res)
-    with CACHE_LOCK:
-        CACHE["miners"] = sorted(out, key=lambda x: x["name"])
-        tz = pytz.timezone("Asia/Tehran")
-        now = datetime.now(tz)
-        CACHE["last_update"] = now.strftime("%Y-%m-%d %H:%M:%S")
-        next_update = now.timestamp() + CACHE_INTERVAL
-        CACHE["next_update"] = next_update
+    
+    tz = pytz.timezone("Asia/Tehran")
+    now = datetime.now(tz)
+    last_update = now.strftime("%Y-%m-%d %H:%M:%S")
+    
+    return sorted(out, key=lambda x: x["name"]), last_update, now.timestamp()
 
-# initial refresh (if IP present)
-if MINER_IP:
-    try:
-        refresh_all()
-    except Exception:
-        pass
-
-def periodic_refresher(interval=CACHE_INTERVAL):
-    while True:
-        try:
-            refresh_all()
-        except Exception:
-            pass
-        time.sleep(interval)
-
-if MINER_IP:
-    t = threading.Thread(target=periodic_refresher, daemon=True)
-    t.start()
+def calculate_total_hashrate(miners):
+    total = 0
+    for miner in miners:
+        if miner.get("alive") and miner.get("hashrate") is not None:
+            total += miner["hashrate"]
+    return round(total, 2)
 
 # === Flask UI ===
 app = Flask(__name__)
@@ -261,44 +222,16 @@ tr:nth-child(even){background:#f8fafc;}
 .control-left{display:flex; align-items:center; gap:15px;}
 @media(max-width:600px){th,td{font-size:16px;padding:8px;}}
 </style>
-<script>
-function updateCountdown() {
-    const nextUpdateTime = {{ next_update_timestamp }} * 1000;
-    const countdownElement = document.getElementById('countdown');
-    
-    function update() {
-        const now = new Date().getTime();
-        const distance = nextUpdateTime - now;
-        
-        if (distance < 0) {
-            countdownElement.innerHTML = "Updating...";
-            location.reload();
-            return;
-        }
-        
-        const hours = Math.floor(distance / (1000 * 60 * 60));
-        const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
-        const seconds = Math.floor((distance % (1000 * 60)) / 1000);
-        
-        countdownElement.innerHTML = `Next update in: ${hours}h ${minutes}m ${seconds}s`;
-    }
-    
-    update();
-    const countdownInterval = setInterval(update, 1000);
-}
-
-document.addEventListener('DOMContentLoaded', updateCountdown);
-</script>
 </head>
 <body>
 <div class="card">
 <p style="font-size:16px;color:#64748b;">Last Update: {{ last_update }}</p>
-<div id="countdown" class="countdown">Next update in: --</div>
+<div class="countdown">Live Data - No Auto Refresh</div>
 
 <div class="control-row">
     <div class="control-left">
         <form method="POST" action="/">
-            <button type="submit" class="button">Manual Update</button>
+            <button type="submit" class="button">Refresh Now</button>
         </form>
         <div class="total-hashrate">
             Total Hashrate: {{ total_hashrate }} TH/s
@@ -346,7 +279,7 @@ document.addEventListener('DOMContentLoaded', updateCountdown);
 <td>{{ m.hashrate or "-" }}</td>
 <td>{{ m.power or "-" }}</td>
 </tr>
-{% endfor %}
+{% for m in miners %}
 </tbody>
 </table>
 </div>
@@ -356,23 +289,18 @@ document.addEventListener('DOMContentLoaded', updateCountdown);
 
 @app.route("/", methods=["GET", "POST"])
 def index():
-    if request.method == "POST":
-        refresh_all()
-    with CACHE_LOCK:
-        miners = CACHE["miners"]
-        last_update = CACHE["last_update"]
-        next_update_timestamp = CACHE.get("next_update", None)
-        total_hashrate = calculate_total_hashrate(miners)
+    # Always get fresh data on every request
+    miners, last_update, _ = get_live_data()
+    total_hashrate = calculate_total_hashrate(miners)
+    
     return render_template_string(
         TEMPLATE,
         miners=miners,
         last_update=last_update,
-        next_update_timestamp=next_update_timestamp,
         total_hashrate=total_hashrate,
         miner_ip=MINER_IP,
     )
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    # bind to 0.0.0.0 for Railway
     app.run(host="0.0.0.0", port=port, debug=False)
