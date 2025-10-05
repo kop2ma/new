@@ -16,11 +16,9 @@ MINER_IP = os.environ.get("MINER_IP")
 MINER_USER = os.environ.get("MINER_USER", "")
 MINER_PASS = os.environ.get("MINER_PASS", "")
 
-# MINER names & ports
 MINER_NAMES = ["131", "132", "133", "65", "66", "70"]
 MINER_PORTS = [204, 205, 206, 304, 305, 306]
 
-# Build MINERS list at runtime from MINER_IP and the fixed ports
 def build_miners():
     ip = MINER_IP
     miners = []
@@ -30,7 +28,6 @@ def build_miners():
 
 MINERS = build_miners() if MINER_IP else []
 
-# Other config
 SOCKET_TIMEOUT = 3.0
 MAX_WORKERS = 6
 COMMANDS = [{"command": "summary"}, {"command": "devs"}]
@@ -164,6 +161,10 @@ def poll_miner(miner):
         result["board_temps"] = boards
     return result
 
+# === بدون کش - فقط ذخیره آخرین رفرش ===
+last_refresh_data = {"miners": [], "last_update": None}
+last_refresh_lock = threading.Lock()
+
 def calculate_total_hashrate(miners):
     total = 0
     for miner in miners:
@@ -171,13 +172,17 @@ def calculate_total_hashrate(miners):
             total += miner["hashrate"]
     return round(total, 2)
 
-def get_live_data():
-    """Get fresh data from all miners - NO CACHE"""
-    miners = []
+def refresh_all():
+    global MINERS
+    MINERS = build_miners() if MINER_IP else []
+    out = []
     if not MINERS:
-        return miners
+        with last_refresh_lock:
+            last_refresh_data["miners"] = []
+            last_refresh_data["last_update"] = None
+        return
     
-    print(f"🔄 Fetching LIVE data at: {datetime.now()}")
+    print(f"🔄 Fetching LIVE miner data at: {datetime.now()}")
     
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         futures = {ex.submit(poll_miner, m): m for m in MINERS}
@@ -186,9 +191,12 @@ def get_live_data():
                 res = fut.result()
             except Exception:
                 res = {"name": f"{futures[fut]['name']} ({futures[fut]['port']})", "alive": False}
-            miners.append(res)
+            out.append(res)
     
-    return sorted(miners, key=lambda x: x["name"])
+    with last_refresh_lock:
+        last_refresh_data["miners"] = sorted(out, key=lambda x: x["name"])
+        tz = pytz.timezone("Asia/Tehran")
+        last_refresh_data["last_update"] = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
 
 # === Flask UI ===
 app = Flask(__name__)
@@ -199,7 +207,7 @@ TEMPLATE = """
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Miner Panel - LIVE</title>
+<title>Miner Panel</title>
 <style>
 body{font-family:sans-serif; background:#f0f4f8; color:#0f172a; padding:5px; margin:5px;}
 .card{background:white;border-radius:12px;padding:10px;margin-bottom:10px;box-shadow:0 4px 16px rgba(0,0,0,0.08);}
@@ -214,7 +222,8 @@ tr:nth-child(even){background:#f8fafc;}
 .temp-low{color:#10b981; font-weight:bold;}
 .temp-high{color:#dc2626; font-weight:bold;}
 .temp-container{display:flex; justify-content:center; gap:8px; flex-wrap:wrap;}
-.live-badge{background:#10b981; color:white; padding:4px 8px; border-radius:4px; font-size:12px; margin-left:10px;}
+.countdown{font-size:14px;color:#64748b;margin-top:5px;}
+.total-hashrate{background:#e0e7ff; padding:8px 16px; border-radius:8px; font-weight:bold; font-size:16px; color:#1e40af;}
 .control-row{display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; gap:15px;}
 .control-left{display:flex; align-items:center; gap:15px;}
 @media(max-width:600px){th,td{font-size:16px;padding:8px;}}
@@ -222,17 +231,12 @@ tr:nth-child(even){background:#f8fafc;}
 </head>
 <body>
 <div class="card">
-<div style="display:flex; align-items:center; gap:10px;">
-    <h2 style="margin:0;">Miner Panel</h2>
-    <span class="live-badge">LIVE DATA</span>
-</div>
-
 <p style="font-size:16px;color:#64748b;">Last Update: {{ last_update }}</p>
 
 <div class="control-row">
     <div class="control-left">
         <form method="POST" action="/">
-            <button type="submit" class="button">Refresh Data</button>
+            <button type="submit" class="button">Manual Update</button>
         </form>
         <div class="total-hashrate">
             Total Hashrate: {{ total_hashrate }} TH/s
@@ -290,16 +294,17 @@ tr:nth-child(even){background:#f8fafc;}
 
 @app.route("/", methods=["GET", "POST"])
 def index():
-    # لاگ برای هر درخواست - مطمئن بشی سرور بیداره
-    print(f"✅ REQUEST RECEIVED at: {datetime.now()}")
+    if request.method == "POST":
+        refresh_all()
+        print(f"✅ MANUAL REFRESH at: {datetime.now()}")
     
-    # همیشه داده لایو بگیر
-    miners = get_live_data()
-    total_hashrate = calculate_total_hashrate(miners)
+    # برای هر درخواست لاگ بزن (جلوگیری از خوابیدن)
+    print(f"✅ REQUEST at: {datetime.now()}")
     
-    # زمان آپدیت
-    tz = pytz.timezone("Asia/Tehran")
-    last_update = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+    with last_refresh_lock:
+        miners = last_refresh_data["miners"]
+        last_update = last_refresh_data["last_update"]
+        total_hashrate = calculate_total_hashrate(miners)
     
     return render_template_string(
         TEMPLATE,
@@ -311,5 +316,7 @@ def index():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    print("🚀 Starting LIVE Miner Monitor (No Cache)...")
+    # ابتدا داده‌ها رو بگیر
+    if MINER_IP:
+        refresh_all()
     app.run(host="0.0.0.0", port=port, debug=False)
