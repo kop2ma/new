@@ -376,7 +376,7 @@ def get_login_report():
     return jsonify({
         "recent_logins": recent_logins[-10:],  # 10 تا آخرین
         "last_login": last_login,
-        "week_report": week_report
+        "week_report": week_report()
     })
 
 if __name__ == "__main__":
