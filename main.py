@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -411,21 +412,44 @@ def index():
 
 @app.route("/get_login_report")
 def get_login_report():
-    tz = pytz.timezone("Asia/Tehran")
-    now = datetime.now(tz)
-    one_day_ago = now - timedelta(hours=24)
-    recent_logins = []
-    for login_time in login_times:
-        if login_time >= one_day_ago:
-            j_time = jdatetime.datetime.fromgregorian(login_time)
-            recent_logins.append({"time": j_time.strftime("%H:%M:%S")})
-    last_login = jdatetime.datetime.fromgregorian(login_times[-1]).strftime("%Y/%m/%d - %H:%M:%S") if login_times else "No logins"
-    week_report = get_week_report()
-    return jsonify({
-        "recent_logins": recent_logins[-10:],
-        "last_login": last_login,
-        "week_report": week_report
-    })
+    try:
+        tz = pytz.timezone("Asia/Tehran")
+        now = datetime.now(tz)
+        one_day_ago = now - timedelta(hours=24)
+        recent_logins = []
+        
+        for login_time in login_times:
+            if login_time >= one_day_ago:
+                j_time = jdatetime.datetime.fromgregorian(datetime=login_time)
+                recent_logins.append({"time": j_time.strftime("%H:%M:%S")})
+        
+        last_login = None
+        if login_times:
+            last_login_time = login_times[-1]
+            j_last_login = jdatetime.datetime.fromgregorian(datetime=last_login_time)
+            last_login = j_last_login.strftime("%Y/%m/%d - %H:%M:%S")
+        else:
+            last_login = "No logins"
+            
+        week_report = get_week_report()
+        
+        return jsonify({
+            "recent_logins": recent_logins[-10:],
+            "last_login": last_login,
+            "week_report": week_report
+        })
+    except Exception as e:
+        print(f"Error in get_login_report: {e}")
+        return jsonify({
+            "recent_logins": [],
+            "last_login": "Error",
+            "week_report": {
+                "current_week": {},
+                "last_week": {},
+                "current_week_start": "Error",
+                "last_week_start": "Error"
+            }
+        })
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
