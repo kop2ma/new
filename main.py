@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -161,32 +160,48 @@ def poll_miner(miner):
 
 # === Login Report ===
 def get_week_report():
-    tz = pytz.timezone("Asia/Tehran")
-    now = datetime.now(tz)
-    current_week_start = now - timedelta(days=now.weekday())
-    last_week_start = current_week_start - timedelta(days=7)
-    
-    current_week_data = {}
-    last_week_data = {}
-    
-    for login_time in login_times:
-        if login_time >= current_week_start:
-            day_name = jdatetime.datetime.fromgregorian(login_time).strftime("%A")
-            current_week_data[day_name] = current_week_data.get(day_name, 0) + 1
-        elif login_time >= last_week_start:
-            day_name = jdatetime.datetime.fromgregorian(login_time).strftime("%A")
-            last_week_data[day_name] = last_week_data.get(day_name, 0) + 1
-    
-    week_days = ["Saturday","Sunday","Monday","Tuesday","Wednesday","Thursday","Friday"]
-    current_week_sorted = {day: current_week_data.get(day, 0) for day in week_days}
-    last_week_sorted = {day: last_week_data.get(day, 0) for day in week_days}
-    
-    return {
-        "current_week": current_week_sorted,
-        "last_week": last_week_sorted,
-        "current_week_start": jdatetime.datetime.fromgregorian(current_week_start).strftime("%Y/%m/%d"),
-        "last_week_start": jdatetime.datetime.fromgregorian(last_week_start).strftime("%Y/%m/%d")
-    }
+    try:
+        tz = pytz.timezone("Asia/Tehran")
+        now = datetime.now(tz)
+        
+        # Calculate week start (Monday as start of week)
+        current_week_start = now - timedelta(days=now.weekday())
+        last_week_start = current_week_start - timedelta(days=7)
+        
+        current_week_data = {}
+        last_week_data = {}
+        
+        for login_time in login_times:
+            if login_time.tzinfo is None:
+                login_time = tz.localize(login_time)
+                
+            if login_time >= current_week_start:
+                j_date = jdatetime.datetime.fromgregorian(datetime=login_time)
+                day_name = j_date.strftime("%A")
+                current_week_data[day_name] = current_week_data.get(day_name, 0) + 1
+            elif login_time >= last_week_start:
+                j_date = jdatetime.datetime.fromgregorian(datetime=login_time)
+                day_name = j_date.strftime("%A")
+                last_week_data[day_name] = last_week_data.get(day_name, 0) + 1
+        
+        week_days = ["Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+        current_week_sorted = {day: current_week_data.get(day, 0) for day in week_days}
+        last_week_sorted = {day: last_week_data.get(day, 0) for day in week_days}
+        
+        return {
+            "current_week": current_week_sorted,
+            "last_week": last_week_sorted,
+            "current_week_start": jdatetime.datetime.fromgregorian(datetime=current_week_start).strftime("%Y/%m/%d"),
+            "last_week_start": jdatetime.datetime.fromgregorian(datetime=last_week_start).strftime("%Y/%m/%d")
+        }
+    except Exception as e:
+        print(f"Error in get_week_report: {e}")
+        return {
+            "current_week": {},
+            "last_week": {},
+            "current_week_start": "Error",
+            "last_week_start": "Error"
+        }
 
 # === LIVE DATA ===
 def get_live_data():
@@ -401,7 +416,8 @@ window.onclick = function(event) {
 @app.route("/", methods=["GET", "POST"])
 def index():
     tz = pytz.timezone("Asia/Tehran")
-    login_times.append(datetime.now(tz))
+    current_time = datetime.now(tz)
+    login_times.append(current_time)
     miners = get_live_data()
     total_hashrate = calculate_total_hashrate(miners)
     return render_template_string(
@@ -419,6 +435,10 @@ def get_login_report():
         recent_logins = []
         
         for login_time in login_times:
+            # Ensure timezone awareness
+            if login_time.tzinfo is None:
+                login_time = tz.localize(login_time)
+                
             if login_time >= one_day_ago:
                 j_time = jdatetime.datetime.fromgregorian(datetime=login_time)
                 recent_logins.append({"time": j_time.strftime("%H:%M:%S")})
@@ -426,6 +446,8 @@ def get_login_report():
         last_login = None
         if login_times:
             last_login_time = login_times[-1]
+            if last_login_time.tzinfo is None:
+                last_login_time = tz.localize(last_login_time)
             j_last_login = jdatetime.datetime.fromgregorian(datetime=last_login_time)
             last_login = j_last_login.strftime("%Y/%m/%d - %H:%M:%S")
         else:
