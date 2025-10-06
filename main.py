@@ -15,8 +15,11 @@ MINER_IP = os.environ.get("MINER_IP")
 MINER_NAMES = ["131", "132", "133", "65", "66", "70"]
 MINER_PORTS = [204, 205, 206, 304, 305, 306]
 
-# Login storage
-login_times = []
+# Login storage - ساختار جدید
+login_data = {
+    "current_week": {},  # { "1405/10/10": ["12:30:45", "14:20:15"], ... }
+    "current_saturday": None  # تاریخ شنبه هفته جاری
+}
 
 def build_miners():
     ip = MINER_IP
@@ -159,50 +162,73 @@ def poll_miner(miner):
     return result
 
 # === Login Report ===
+def get_current_saturday():
+    """پیدا کردن شنبه هفته جاری بر اساس تقویم جلالی"""
+    tz = pytz.timezone("Asia/Tehran")
+    now = datetime.now(tz)
+    j_now = jdatetime.datetime.fromgregorian(datetime=now)
+    
+    # پیدا کردن شنبه (روز 0 در هفته جلالی)
+    days_since_saturday = j_now.weekday()
+    current_saturday = j_now - timedelta(days=days_since_saturday)
+    
+    return current_saturday.strftime("%Y/%m/%d")
+
+def update_login_data():
+    """آپدیت داده‌های لاگین با سیستم هفته‌ای جدید"""
+    tz = pytz.timezone("Asia/Tehran")
+    current_time = datetime.now(tz)
+    j_current = jdatetime.datetime.fromgregorian(datetime=current_time)
+    current_date = j_current.strftime("%Y/%m/%d")
+    current_time_str = j_current.strftime("%H:%M:%S")
+    
+    # بررسی آیا شنبه جدید شده؟
+    current_saturday = get_current_saturday()
+    
+    if login_data["current_saturday"] != current_saturday:
+        # شنبه جدید - پاک کردن داده‌های قدیم و شروع جدید
+        login_data["current_week"] = {}
+        login_data["current_saturday"] = current_saturday
+    
+    # اضافه کردن لاگین جدید
+    if current_date not in login_data["current_week"]:
+        login_data["current_week"][current_date] = []
+    
+    # اضافه کردن زمان اگر تکراری نیست
+    if current_time_str not in login_data["current_week"][current_date]:
+        login_data["current_week"][current_date].append(current_time_str)
+        login_data["current_week"][current_date].sort()
+
 def get_week_report():
-    try:
-        tz = pytz.timezone("Asia/Tehran")
-        now = datetime.now(tz)
+    """گزارش هفته جاری به صورت درختی"""
+    update_login_data()
+    
+    week_days_persian = ["شنبه", "یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه", "جمعه"]
+    
+    # ساختار درختی برای گزارش
+    tree_report = {
+        "saturday": login_data["current_saturday"],
+        "days": []
+    }
+    
+    # تولید روزهای هفته از شنبه تا جمعه
+    current_saturday = jdatetime.datetime.strptime(login_data["current_saturday"], "%Y/%m/%d")
+    
+    for i in range(7):
+        current_date = current_saturday + timedelta(days=i)
+        date_str = current_date.strftime("%Y/%m/%d")
+        day_name = week_days_persian[i]
         
-        # Calculate week start (Monday as start of week)
-        current_week_start = now - timedelta(days=now.weekday())
-        last_week_start = current_week_start - timedelta(days=7)
-        
-        current_week_data = {}
-        last_week_data = {}
-        
-        for login_time in login_times:
-            # Ensure timezone awareness
-            if login_time.tzinfo is None:
-                login_time = tz.localize(login_time)
-                
-            if login_time >= current_week_start:
-                j_date = jdatetime.datetime.fromgregorian(datetime=login_time)
-                day_name = j_date.strftime("%A")
-                current_week_data[day_name] = current_week_data.get(day_name, 0) + 1
-            elif login_time >= last_week_start:
-                j_date = jdatetime.datetime.fromgregorian(datetime=login_time)
-                day_name = j_date.strftime("%A")
-                last_week_data[day_name] = last_week_data.get(day_name, 0) + 1
-        
-        week_days = ["Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-        current_week_sorted = {day: current_week_data.get(day, 0) for day in week_days}
-        last_week_sorted = {day: last_week_data.get(day, 0) for day in week_days}
-        
-        return {
-            "current_week": current_week_sorted,
-            "last_week": last_week_sorted,
-            "current_week_start": jdatetime.datetime.fromgregorian(datetime=current_week_start).strftime("%Y/%m/%d"),
-            "last_week_start": jdatetime.datetime.fromgregorian(datetime=last_week_start).strftime("%Y/%m/%d")
+        day_data = {
+            "date": date_str,
+            "day_name": day_name,
+            "logins": login_data["current_week"].get(date_str, []),
+            "count": len(login_data["current_week"].get(date_str, []))
         }
-    except Exception as e:
-        print(f"Error in get_week_report: {e}")
-        return {
-            "current_week": {},
-            "last_week": {},
-            "current_week_start": "Error",
-            "last_week_start": "Error"
-        }
+        
+        tree_report["days"].append(day_data)
+    
+    return tree_report
 
 # === LIVE DATA ===
 def get_live_data():
@@ -255,13 +281,19 @@ tr:nth-child(even){background:#f8fafc;}
 .total-hashrate{background:#e0e7ff; padding:8px 16px; border-radius:8px; font-weight:bold; font-size:16px; color:#1e40af;}
 .control-row{display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; gap:15px;}
 .control-left{display:flex; align-items:center; gap:15px;}
-.modal{display:none;position:fixed;top:50%;left:50%;transform:translate(-50%, -50%);background:white;padding:20px;border:3px solid #2ecc71;border-radius:10px;box-shadow:0 0 20px rgba(0,0,0,0.3);z-index:1000;width:90%;max-width:500px;max-height:80vh;overflow-y:auto;}
+.modal{display:none;position:fixed;top:50%;left:50%;transform:translate(-50%, -50%);background:white;padding:20px;border:3px solid #2ecc71;border-radius:10px;box-shadow:0 0 20px rgba(0,0,0,0.3);z-index:1000;width:90%;max-width:600px;max-height:80vh;overflow-y:auto;}
 .modal-overlay{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:999;}
 .report-btn{background:#9b59b6;color:white;padding:10px 15px;border:none;border-radius:8px;cursor:pointer;font-size:18px;}
 .report-btn:hover{background:#8e44ad;}
 .modal h3{margin-top:0;color:#2c3e50;text-align:center;border-bottom:2px solid #ecf0f1;padding-bottom:10px;}
 .modal h4{color:#34495e;margin-bottom:8px;margin-top:20px;}
 .modal p{margin:5px 0;padding:5px;background:#f8f9fa;border-radius:5px;}
+.tree-item{margin:5px 0;padding:8px;background:#f8f9fa;border-radius:8px;border:1px solid #e9ecef;}
+.tree-header{display:flex; justify-content:space-between; align-items:center; cursor:pointer; font-weight:bold;}
+.tree-content{margin-top:8px; padding-right:20px; display:none;}
+.tree-time{margin:2px 0; padding:3px 8px; background:white; border-radius:4px; font-family:monospace;}
+.expand-btn{background:none; border:none; font-size:16px; cursor:pointer; margin-left:10px;}
+.week-title{text-align:center; color:#2c3e50; margin-bottom:15px; padding:10px; background:#e8f5e8; border-radius:8px;}
 @media(max-width:600px){th,td{font-size:16px;padding:8px;}}
 </style>
 </head>
@@ -326,13 +358,13 @@ tr:nth-child(even){background:#f8fafc;}
 
 <div id="modalOverlay" class="modal-overlay" onclick="closeModal()"></div>
 <div id="reportModal" class="modal">
-    <h3>📋 Login Report</h3>
+    <h3>📋 گزارش ورودهای هفته جاری</h3>
     <div id="reportContent">
-        <p>Loading...</p>
+        <p>در حال بارگذاری...</p>
     </div>
     <div style="text-align: center; margin-top: 20px;">
         <button onclick="closeModal()" style="background: #e74c3c; color: white; padding: 10px 20px; border: none; border-radius: 8px; cursor: pointer; font-size: 16px;">
-            ❌ Close
+            ❌ بستن
         </button>
     </div>
 </div>
@@ -347,53 +379,49 @@ function showLoginReport() {
         .then(data => {
             let content = '';
             
-            // Last logins
-            content += '<h4>🕐 Last 24 Hours:</h4>';
-            if (data.recent_logins && data.recent_logins.length > 0) {
-                data.recent_logins.forEach(login => {
-                    content += `<p>🕐 ${login.time}</p>`;
-                });
-            } else {
-                content += '<p>No logins in last 24 hours</p>';
-            }
+            content += `<div class="week-title">
+                <h4>📅 هفته شروع شده از شنبه ${data.saturday}</h4>
+            </div>`;
             
-            // Current week
-            content += `<h4>📅 Current Week (${data.week_report.current_week_start}):</h4>`;
-            let currentWeekHasData = false;
-            Object.entries(data.week_report.current_week).forEach(([day, count]) => {
-                if (count > 0) {
-                    content += `<p>${day}: ${count} times</p>`;
-                    currentWeekHasData = true;
+            data.days.forEach(day => {
+                content += `<div class="tree-item">
+                    <div class="tree-header" onclick="toggleDay('day-${day.date}')">
+                        <span>${day.day_name} - ${day.date} (${day.count} ورود)</span>
+                        <button class="expand-btn">➕</button>
+                    </div>
+                    <div id="day-${day.date}" class="tree-content">
+                `;
+                
+                if (day.logins.length > 0) {
+                    day.logins.forEach(login => {
+                        content += `<div class="tree-time">🕐 ${login}</div>`;
+                    });
+                } else {
+                    content += `<div style="text-align:center; color:#666; padding:10px;">بدون رکورد</div>`;
                 }
+                
+                content += `</div></div>`;
             });
-            if (!currentWeekHasData) {
-                content += '<p>No data for current week</p>';
-            }
-            
-            // Last week
-            content += `<h4>📅 Last Week (${data.week_report.last_week_start}):</h4>`;
-            let lastWeekHasData = false;
-            Object.entries(data.week_report.last_week).forEach(([day, count]) => {
-                if (count > 0) {
-                    content += `<p>${day}: ${count} times</p>`;
-                    lastWeekHasData = true;
-                }
-            });
-            if (!lastWeekHasData) {
-                content += '<p>No data for last week</p>';
-            }
-            
-            // Last login
-            if (data.last_login) {
-                content += `<h4>⏱️ Last Login:</h4><p>${data.last_login}</p>`;
-            }
             
             document.getElementById('reportContent').innerHTML = content;
         })
         .catch(error => {
             console.error('Error fetching report:', error);
-            document.getElementById('reportContent').innerHTML = '<p>Error loading report</p>';
+            document.getElementById('reportContent').innerHTML = '<p>خطا در بارگذاری گزارش</p>';
         });
+}
+
+function toggleDay(dayId) {
+    const content = document.getElementById(dayId);
+    const btn = content.previousElementSibling.querySelector('.expand-btn');
+    
+    if (content.style.display === 'block') {
+        content.style.display = 'none';
+        btn.textContent = '➕';
+    } else {
+        content.style.display = 'block';
+        btn.textContent = '➖';
+    }
 }
 
 function closeModal() {
@@ -416,9 +444,7 @@ window.onclick = function(event) {
 
 @app.route("/", methods=["GET", "POST"])
 def index():
-    tz = pytz.timezone("Asia/Tehran")
-    current_time = datetime.now(tz)
-    login_times.append(current_time)
+    update_login_data()  # آپدیت داده‌های لاگین در هر بار رفرش
     miners = get_live_data()
     total_hashrate = calculate_total_hashrate(miners)
     return render_template_string(
@@ -430,48 +456,13 @@ def index():
 @app.route("/get_login_report")
 def get_login_report():
     try:
-        tz = pytz.timezone("Asia/Tehran")
-        now = datetime.now(tz)
-        one_day_ago = now - timedelta(hours=24)
-        recent_logins = []
-        
-        for login_time in login_times:
-            # Ensure timezone awareness
-            if login_time.tzinfo is None:
-                login_time = tz.localize(login_time)
-                
-            if login_time >= one_day_ago:
-                j_time = jdatetime.datetime.fromgregorian(datetime=login_time)
-                recent_logins.append({"time": j_time.strftime("%H:%M:%S")})
-        
-        last_login = None
-        if login_times:
-            last_login_time = login_times[-1]
-            if last_login_time.tzinfo is None:
-                last_login_time = tz.localize(last_login_time)
-            j_last_login = jdatetime.datetime.fromgregorian(datetime=last_login_time)
-            last_login = j_last_login.strftime("%Y/%m/%d - %H:%M:%S")
-        else:
-            last_login = "No logins"
-            
         week_report = get_week_report()
-        
-        return jsonify({
-            "recent_logins": recent_logins[-10:],
-            "last_login": last_login,
-            "week_report": week_report
-        })
+        return jsonify(week_report)
     except Exception as e:
         print(f"Error in get_login_report: {e}")
         return jsonify({
-            "recent_logins": [],
-            "last_login": "Error",
-            "week_report": {
-                "current_week": {},
-                "last_week": {},
-                "current_week_start": "Error",
-                "last_week_start": "Error"
-            }
+            "saturday": "Error",
+            "days": []
         })
 
 if __name__ == "__main__":
