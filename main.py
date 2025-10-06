@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -240,8 +239,12 @@ tr:nth-child(even){background:#f8fafc;}
 .control-row{display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; gap:15px;}
 .control-left{display:flex; align-items:center; gap:15px;}
 .modal{display:none;position:fixed;top:50%;left:50%;transform:translate(-50%, -50%);background:white;padding:20px;border:3px solid #2ecc71;border-radius:10px;box-shadow:0 0 20px rgba(0,0,0,0.3);z-index:1000;width:90%;max-width:500px;max-height:80vh;overflow-y:auto;}
+.modal-overlay{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:999;}
 .report-btn{background:#9b59b6;color:white;padding:10px 15px;border:none;border-radius:8px;cursor:pointer;font-size:18px;}
 .report-btn:hover{background:#8e44ad;}
+.modal h3{margin-top:0;color:#2c3e50;text-align:center;border-bottom:2px solid #ecf0f1;padding-bottom:10px;}
+.modal h4{color:#34495e;margin-bottom:8px;margin-top:20px;}
+.modal p{margin:5px 0;padding:5px;background:#f8f9fa;border-radius:5px;}
 @media(max-width:600px){th,td{font-size:16px;padding:8px;}}
 </style>
 </head>
@@ -304,18 +307,31 @@ tr:nth-child(even){background:#f8fafc;}
 </table>
 </div>
 
+<div id="modalOverlay" class="modal-overlay" onclick="closeModal()"></div>
 <div id="reportModal" class="modal">
     <h3>📋 Login Report</h3>
-    <div id="reportContent"></div>
-    <button onclick="closeModal()" style="margin-top: 15px; background: #e74c3c; color: white; padding: 8px 15px; border: none; border-radius: 5px;">❌ Close</button>
+    <div id="reportContent">
+        <p>Loading...</p>
+    </div>
+    <div style="text-align: center; margin-top: 20px;">
+        <button onclick="closeModal()" style="background: #e74c3c; color: white; padding: 10px 20px; border: none; border-radius: 8px; cursor: pointer; font-size: 16px;">
+            ❌ Close
+        </button>
+    </div>
 </div>
 
 <script>
 function showLoginReport() {
+    document.getElementById('modalOverlay').style.display = 'block';
+    document.getElementById('reportModal').style.display = 'block';
+    
     fetch('/get_login_report')
-        .then(r => r.json())
+        .then(response => response.json())
         .then(data => {
-            let content = '<h4>🕐 Last 24 Hours:</h4>';
+            let content = '';
+            
+            // Last logins
+            content += '<h4>🕐 Last 24 Hours:</h4>';
             if (data.recent_logins && data.recent_logins.length > 0) {
                 data.recent_logins.forEach(login => {
                     content += `<p>🕐 ${login.time}</p>`;
@@ -323,27 +339,58 @@ function showLoginReport() {
             } else {
                 content += '<p>No logins in last 24 hours</p>';
             }
+            
+            // Current week
             content += `<h4>📅 Current Week (${data.week_report.current_week_start}):</h4>`;
+            let currentWeekHasData = false;
             Object.entries(data.week_report.current_week).forEach(([day, count]) => {
                 if (count > 0) {
                     content += `<p>${day}: ${count} times</p>`;
+                    currentWeekHasData = true;
                 }
             });
+            if (!currentWeekHasData) {
+                content += '<p>No data for current week</p>';
+            }
+            
+            // Last week
             content += `<h4>📅 Last Week (${data.week_report.last_week_start}):</h4>`;
+            let lastWeekHasData = false;
             Object.entries(data.week_report.last_week).forEach(([day, count]) => {
                 if (count > 0) {
                     content += `<p>${day}: ${count} times</p>`;
+                    lastWeekHasData = true;
                 }
             });
+            if (!lastWeekHasData) {
+                content += '<p>No data for last week</p>';
+            }
+            
+            // Last login
             if (data.last_login) {
                 content += `<h4>⏱️ Last Login:</h4><p>${data.last_login}</p>`;
             }
+            
             document.getElementById('reportContent').innerHTML = content;
-            document.getElementById('reportModal').style.display = 'block';
+        })
+        .catch(error => {
+            console.error('Error fetching report:', error);
+            document.getElementById('reportContent').innerHTML = '<p>Error loading report</p>';
         });
 }
+
 function closeModal() {
+    document.getElementById('modalOverlay').style.display = 'none';
     document.getElementById('reportModal').style.display = 'none';
+}
+
+// Close modal when clicking outside
+window.onclick = function(event) {
+    const modal = document.getElementById('reportModal');
+    const overlay = document.getElementById('modalOverlay');
+    if (event.target === overlay) {
+        closeModal();
+    }
 }
 </script>
 </body>
