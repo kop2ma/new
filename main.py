@@ -7,12 +7,16 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import pytz
-from flask import Flask, render_template_string, request
+from flask import Flask, render_template_string, jsonify
+import jdatetime
 
 # === CONFIG ===
 MINER_IP = os.environ.get("MINER_IP")
 MINER_NAMES = ["131", "132", "133", "65", "66", "70"]
 MINER_PORTS = [204, 205, 206, 304, 305, 306]
+
+# ذخیره لاگین‌ها
+login_times = []
 
 def build_miners():
     ip = MINER_IP
@@ -154,7 +158,36 @@ def poll_miner(miner):
         result["board_temps"] = boards
     return result
 
-# === LIVE DATA (no cache) ===
+# === گزارش هفته و روز ===
+def get_week_report():
+    now = jdatetime.datetime.now()
+    # هفته جاری از شنبه شروع می‌شود
+    current_week_start = now - jdatetime.timedelta(days=now.weekday() + 1 if now.weekday() < 6 else 0)
+    last_week_start = current_week_start - jdatetime.timedelta(days=7)
+    
+    current_week_data = {}
+    last_week_data = {}
+    
+    for login_time in login_times:
+        if login_time >= current_week_start:
+            day_name = login_time.strftime("%A")  # روز هفته انگلیسی
+            current_week_data[day_name] = current_week_data.get(day_name, 0) + 1
+        elif login_time >= last_week_start:
+            day_name = login_time.strftime("%A")
+            last_week_data[day_name] = last_week_data.get(day_name, 0) + 1
+    
+    week_days = ["Saturday","Sunday","Monday","Tuesday","Wednesday","Thursday","Friday"]
+    current_week_sorted = {day: current_week_data.get(day,0) for day in week_days}
+    last_week_sorted = {day: last_week_data.get(day,0) for day in week_days}
+    
+    return {
+        "current_week": current_week_sorted,
+        "last_week": last_week_sorted,
+        "current_week_start": current_week_start.strftime("%Y/%m/%d"),
+        "last_week_start": last_week_start.strftime("%Y/%m/%d")
+    }
+
+# === LIVE DATA (بدون کش) ===
 def get_live_data():
     miners = build_miners() if MINER_IP else []
     out = []
@@ -207,18 +240,19 @@ tr:nth-child(even){background:#f8fafc;}
 .temp-low{color:#10b981; font-weight:bold;}
 .temp-high{color:#dc2626; font-weight:bold;}
 .temp-container{display:flex; justify-content:center; gap:8px; flex-wrap:wrap;}
-.countdown{font-size:14px;color:#64748b;margin-top:5px;}
 .total-hashrate{background:#e0e7ff; padding:8px 16px; border-radius:8px; font-weight:bold; font-size:16px; color:#1e40af;}
 .control-row{display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; gap:15px;}
 .control-left{display:flex; align-items:center; gap:15px;}
+.modal {display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:white; padding:20px; border:3px solid #2ecc71; border-radius:10px; box-shadow:0 0 20px rgba(0,0,0,0.3); z-index:1000; width:90%; max-width:500px; max-height:80vh; overflow-y:auto;}
+.report-btn {background:#9b59b6; color:white; padding:15px; border:none; border-radius:8px; cursor:pointer; font-size:20px;}
+.report-btn:hover {background:#8e44ad;}
+.day-branch {margin-left:10px;}
+.login-time {margin-left:20px; font-size:14px; color:#333;}
 @media(max-width:600px){th,td{font-size:16px;padding:8px;}}
 </style>
 </head>
 <body>
 <div class="card">
-<p style="font-size:16px;color:#64748b;">Last Update: {{ last_update }}</p>
-<div class="countdown">Live Data - No Auto Refresh</div>
-
 <div class="control-row">
     <div class="control-left">
         <form method="POST" action="/">
@@ -228,6 +262,7 @@ tr:nth-child(even){background:#f8fafc;}
             Total Hashrate: {{ total_hashrate }} TH/s
         </div>
     </div>
+    <button class="report-btn" onclick="showLoginReport()">📊</button>
 </div>
 
 <table>
@@ -274,22 +309,99 @@ tr:nth-child(even){background:#f8fafc;}
 </tbody>
 </table>
 </div>
+
+<!-- پنجره پاپ‌آپ گزارش لاگین‌ها -->
+<div id="reportModal" class="modal">
+    <h3>📋 گزارش لاگین‌ها</h3>
+    <div id="reportContent"></div>
+    <button onclick="closeModal()" style="margin-top:15px;background:#e74c3c;color:white;padding:8px 15px;border:none;border-radius:5px;">❌ بستن</button>
+</div>
+
+<script>
+function showLoginReport() {
+    fetch('/get_login_report')
+        .then(r => r.json())
+        .then(data => {
+            let content = '';
+            // هفته جاری
+            content += `<h4>هفته جاری (${data.week_report.current_week_start})</h4>`;
+            Object.entries(data.week_report.current_week).forEach(([day, count]) => {
+                if(count>0){
+                    content += `<div class="day-branch">${day}: ${count} لاگین <button onclick="toggleTimes('${day}')">+</button><div id="times-${day}" style="display:none;"></div></div>`;
+                }
+            });
+
+            // هفته قبل
+            content += `<h4>هفته قبل (${data.week_report.last_week_start})</h4>`;
+            Object.entries(data.week_report.last_week).forEach(([day, count]) => {
+                if(count>0){
+                    content += `<div class="day-branch">${day}: ${count} لاگین <button onclick="toggleTimes('${day}')">+</button><div id="times-${day}" style="display:none;"></div></div>`;
+                }
+            });
+
+            document.getElementById('reportContent').innerHTML = content;
+
+            // ذخیره لاگین‌های دقیق
+            window.loginTimes = data.login_times;
+
+            document.getElementById('reportModal').style.display = 'block';
+        });
+}
+
+// تابع باز و بسته کردن ساعت‌های لاگین
+function toggleTimes(day){
+    const container = document.getElementById(`times-${day}`);
+    if(container.style.display==='none'){
+        container.innerHTML = '';
+        window.loginTimes.forEach(l=>{
+            if(l.day===day){
+                container.innerHTML += `<div class="login-time">${l.time}</div>`;
+            }
+        });
+        container.style.display='block';
+    } else {
+        container.style.display='none';
+    }
+}
+
+function closeModal(){
+    document.getElementById('reportModal').style.display='none';
+}
+</script>
 </body>
 </html>
 """
 
 @app.route("/", methods=["GET", "POST"])
 def index():
-    # Always get fresh data on every request
+    # ذخیره زمان لاگین
+    login_times.append(jdatetime.datetime.now())
+    
     miners, last_update, _ = get_live_data()
     total_hashrate = calculate_total_hashrate(miners)
     
     return render_template_string(
         TEMPLATE,
         miners=miners,
-        last_update=last_update,
-        total_hashrate=total_hashrate,
+        total_hashrate=total_hashrate
     )
+
+@app.route("/get_login_report")
+def get_login_report():
+    now = jdatetime.datetime.now()
+    week_report = get_week_report()
+
+    # ساخت آرایه دقیق لاگین‌ها برای پاپ‌آپ
+    login_list = []
+    for t in login_times:
+        day = t.strftime("%A")
+        time_str = t.strftime("%H:%M:%S")
+        login_list.append({"day": day, "time": time_str})
+
+    return jsonify({
+        "week_report": week_report,
+        "login_times": login_list
+    })
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
