@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+      #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 import os
@@ -7,19 +7,19 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 import pytz
-from flask import Flask, render_template_string, request, jsonify
 import jdatetime
 
 # === CONFIG ===
 MINER_IP = os.environ.get("MINER_IP")
 MINER_NAMES = ["131", "132", "133", "65", "66", "70"]
 MINER_PORTS = [204, 205, 206, 304, 305, 306]
+DEFAULT_TOKEN = "e6302477f23b4e0f6d41e5426cc37581e74d5719a3784a04631e2d1c82602dfd"
 
-# Login storage - ساختار جدید
+# Login storage
 login_data = {
-    "current_week": {},  # { "1405/10/10": ["12:30:45", "14:20:15"], ... }
-    "current_saturday": None,  # تاریخ شنبه هفته جاری
-    "last_login_time": None    # آخرین زمان ثبت لاگین
+    "current_week": {},
+    "current_saturday": None,
+    "last_login_time": None
 }
 
 def build_miners():
@@ -31,7 +31,6 @@ def build_miners():
 
 SOCKET_TIMEOUT = 3.0
 MAX_WORKERS = 6
-COMMANDS = [{"command": "summary"}, {"command": "devs"}]
 
 # === TCP JSON sender ===
 def send_tcp_json(ip, port, payload):
@@ -140,11 +139,14 @@ def poll_miner(miner):
         return result
     responses = {}
     any_response = False
-    for cmd in COMMANDS:
+    # === Send summary with default token ===
+    summary_cmd = {"cmd": "summary", "token": DEFAULT_TOKEN}
+    devs_cmd = {"cmd": "devs", "token": DEFAULT_TOKEN}
+    for cmd in [summary_cmd, devs_cmd]:
         resp = send_tcp_json(ip, port, cmd)
         if resp:
             any_response = True
-            responses[cmd["command"]] = resp
+            responses[cmd["cmd"]] = resp
     if not any_response:
         return result
     result["alive"] = True
@@ -164,89 +166,58 @@ def poll_miner(miner):
 
 # === Login Report ===
 def get_current_saturday():
-    """پیدا کردن شنبه هفته جاری بر اساس تقویم جلالی"""
     tz = pytz.timezone("Asia/Tehran")
     now = datetime.now(tz)
     j_now = jdatetime.datetime.fromgregorian(datetime=now)
-    
-    # پیدا کردن شنبه (روز 0 در هفته جلالی)
     days_since_saturday = j_now.weekday()
     current_saturday = j_now - timedelta(days=days_since_saturday)
-    
     return current_saturday.strftime("%Y/%m/%d")
 
 def should_record_login():
-    """بررسی کند آیا باید لاگین جدید ثبت شود یا نه"""
     tz = pytz.timezone("Asia/Tehran")
     current_time = datetime.now(tz)
-    
-    # اگر اولین لاگین است
     if login_data["last_login_time"] is None:
         return True
-    
-    # بررسی فاصله زمانی - حداقل 5 دقیقه
     time_diff = current_time - login_data["last_login_time"]
-    return time_diff.total_seconds() >= 300  # 300 ثانیه = 5 دقیقه
+    return time_diff.total_seconds() >= 300
 
 def update_login_data():
-    """آپدیت داده‌های لاگین فقط در صورت نیاز"""
     if not should_record_login():
         return
-    
     tz = pytz.timezone("Asia/Tehran")
     current_time = datetime.now(tz)
     j_current = jdatetime.datetime.fromgregorian(datetime=current_time)
     current_date = j_current.strftime("%Y/%m/%d")
-    current_time_str = j_current.strftime("%H:%M:%S")
-    
-    # بررسی آیا شنبه جدید شده؟
     current_saturday = get_current_saturday()
-    
     if login_data["current_saturday"] != current_saturday:
-        # شنبه جدید - پاک کردن داده‌های قدیم و شروع جدید
         login_data["current_week"] = {}
         login_data["current_saturday"] = current_saturday
-    
-    # اضافه کردن لاگین جدید
     if current_date not in login_data["current_week"]:
         login_data["current_week"][current_date] = []
-    
-    # اضافه کردن زمان اگر تکراری نیست
+    current_time_str = j_current.strftime("%H:%M:%S")
     if current_time_str not in login_data["current_week"][current_date]:
         login_data["current_week"][current_date].append(current_time_str)
         login_data["current_week"][current_date].sort()
-    
-    # آپدیت آخرین زمان لاگین
     login_data["last_login_time"] = current_time
 
 def get_week_report():
-    """گزارش هفته جاری به صورت درختی"""
-    # این تابع فقط گزارش می‌دهد، لاگین جدید ثبت نمی‌کند
     week_days_persian = ["شنبه", "یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه", "جمعه"]
-    
-    # ساختار درختی برای گزارش
     tree_report = {
         "saturday": login_data["current_saturday"] or get_current_saturday(),
         "days": []
     }
-    
-    # تولید روزهای هفته از شنبه تا جمعه
     current_saturday = jdatetime.datetime.strptime(tree_report["saturday"], "%Y/%m/%d")
-    
     for i in range(7):
         current_date = current_saturday + timedelta(days=i)
         date_str = current_date.strftime("%Y/%m/%d")
         day_name = week_days_persian[i]
-        
         day_data = {
             "date": date_str,
             "day_name": day_name,
             "logins": login_data["current_week"].get(date_str, []),
             "count": len(login_data["current_week"].get(date_str, []))
         }
-        
         tree_report["days"].append(day_data)
-    
     return tree_report
 
 # === LIVE DATA ===
@@ -255,7 +226,6 @@ def get_live_data():
     out = []
     if not miners:
         return []
-    
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         futures = {ex.submit(poll_miner, m): m for m in miners}
         for fut in futures:
@@ -273,6 +243,8 @@ def calculate_total_hashrate(miners):
             total += miner["hashrate"]
     return round(total, 2)
 
+# === SITE / FLASK ===
+# خودت این قسمت رو جایگذاری کن 
 # === Flask UI ===
 app = Flask(__name__)
 
