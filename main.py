@@ -1,5 +1,13 @@
-      #!/usr/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+
+"""
+miner_panel.py
+Complete module: polling WhatsMiner devices (summary + devs with a default token),
+login/week report, and a simple Flask UI. Configure MINER_IP via environment:
+export MINER_IP="192.168.1.100"
+Then run: python3 miner_panel.py
+"""
 
 import os
 import socket
@@ -8,37 +16,41 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 import pytz
 import jdatetime
+from flask import Flask, render_template_string, request, jsonify
 
 # === CONFIG ===
-MINER_IP = os.environ.get("MINER_IP")
+MINER_IP = os.environ.get("MINER_IP")  # e.g. "185.135.229.121"
 MINER_NAMES = ["131", "132", "133", "65", "66", "70"]
 MINER_PORTS = [204, 205, 206, 304, 305, 306]
+
+# Default token used for all summary/devs calls
 DEFAULT_TOKEN = "e6302477f23b4e0f6d41e5426cc37581e74d5719a3784a04631e2d1c82602dfd"
 
-# Login storage
+# network / concurrency
+SOCKET_TIMEOUT = 3.0
+MAX_WORKERS = 6
+
+# login week tracking
 login_data = {
     "current_week": {},
     "current_saturday": None,
     "last_login_time": None
 }
 
-def build_miners():
-    ip = MINER_IP
-    miners = []
-    for name, port in zip(MINER_NAMES, MINER_PORTS):
-        miners.append({"name": name, "ip": ip, "port": port})
-    return miners
-
-SOCKET_TIMEOUT = 3.0
-MAX_WORKERS = 6
-
 # === TCP JSON sender ===
 def send_tcp_json(ip, port, payload):
+    """
+    Send a JSON-like dict payload to ip:port via TCP and try to parse JSON response.
+    Returns parsed JSON (dict) or None.
+    """
     if not ip:
         return None
-    data = json.dumps(payload).encode("utf-8")
     try:
-        with socket.create_connection((ip, port), timeout=SOCKET_TIMEOUT) as s:
+        data = json.dumps(payload).encode("utf-8")
+    except Exception:
+        return None
+    try:
+        with socket.create_connection((ip, int(port)), timeout=SOCKET_TIMEOUT) as s:
             s.settimeout(SOCKET_TIMEOUT)
             s.sendall(data)
             chunks = []
@@ -53,6 +65,7 @@ def send_tcp_json(ip, port, payload):
             raw = b"".join(chunks).decode("utf-8", errors="ignore").strip()
             if not raw:
                 return None
+            # try clean JSON parse, fallback to substring extraction
             try:
                 return json.loads(raw)
             except Exception:
@@ -68,7 +81,7 @@ def send_tcp_json(ip, port, payload):
     except Exception:
         return None
 
-# === Helpers ===
+# === HELPERS ===
 def format_seconds_pretty(sec: int):
     days, rem = divmod(sec, 86400)
     hours, rem = divmod(rem, 3600)
@@ -85,15 +98,20 @@ def format_seconds_pretty(sec: int):
     return " ".join(parts)
 
 def parse_summary(summary_json):
+    """
+    Extract useful fields from summary JSON returned by miner.
+    Returns dict with keys: uptime (pretty), hashrate (TH/s or raw), power (int W), temp_avg
+    """
     if not summary_json:
         return {}
     data = None
-    if "SUMMARY" in summary_json and summary_json["SUMMARY"]:
-        data = summary_json["SUMMARY"][0]
-    elif "Msg" in summary_json:
+    if isinstance(summary_json, dict) and "SUMMARY" in summary_json and summary_json["SUMMARY"]:
+        try:
+            data = summary_json["SUMMARY"][0]
+        except Exception:
+            data = None
+    elif isinstance(summary_json, dict) and "Msg" in summary_json and isinstance(summary_json["Msg"], dict):
         data = summary_json["Msg"]
-    else:
-        return {}
     if not data:
         return {}
     mhs_av = data.get("MHS av")
@@ -101,34 +119,60 @@ def parse_summary(summary_json):
     power = data.get("Power")
     temp = data.get("Temperature")
     hashrate = None
-    if mhs_av is not None:
-        if mhs_av > 1_000_000:
-            hashrate = round(mhs_av / 1_000_000, 2)
-        else:
-            hashrate = mhs_av
+    try:
+        if mhs_av is not None:
+            # if very large (H/s), convert to TH/s
+            if isinstance(mhs_av, (int, float)) and mhs_av > 1_000_000:
+                hashrate = round(mhs_av / 1_000_000, 2)  # units: TH/s in UI earlier we used /1e6 mapping
+            else:
+                hashrate = mhs_av
+    except Exception:
+        hashrate = None
     uptime_str = format_seconds_pretty(int(uptime)) if uptime else None
+    try:
+        power_val = int(power) if power is not None else None
+    except Exception:
+        power_val = None
+    try:
+        temp_val = round(float(temp), 1) if temp is not None else None
+    except Exception:
+        temp_val = None
     return {
         "uptime": uptime_str,
         "hashrate": hashrate,
-        "power": int(power) if power else None,
-        "temp_avg": round(temp, 1) if temp else None,
+        "power": power_val,
+        "temp_avg": temp_val,
     }
 
 def parse_devs(devs_json):
+    """
+    Return list of board temperatures (rounded) from DEVS structure.
+    """
     board_temps = []
-    if not devs_json or "DEVS" not in devs_json:
+    if not devs_json or not isinstance(devs_json, dict):
         return board_temps
-    for board in devs_json["DEVS"]:
-        temp = board.get("Temperature")
-        if temp is not None:
-            board_temps.append(round(temp, 1))
+    devs = devs_json.get("DEVS")
+    if not devs:
+        return board_temps
+    for board in devs:
+        try:
+            temp = board.get("Temperature")
+            if temp is not None:
+                board_temps.append(round(float(temp), 1))
+        except Exception:
+            continue
     return board_temps
 
+# === POLLING ===
 def poll_miner(miner):
-    ip = miner["ip"]
-    port = miner["port"]
+    """
+    Poll a single miner dict: {'name','ip','port'}.
+    Sends summary and devs with DEFAULT_TOKEN and returns a result dict.
+    """
+    ip = miner.get("ip")
+    port = miner.get("port")
     result = {
-        "name": f"{miner['name']} ({port})",
+        "name": f"{miner.get('name')} ({port})",
         "alive": False,
         "hashrate": None,
         "uptime": None,
@@ -139,36 +183,79 @@ def poll_miner(miner):
         return result
     responses = {}
     any_response = False
-    # === Send summary with default token ===
+    # send summary and devs with default token
     summary_cmd = {"cmd": "summary", "token": DEFAULT_TOKEN}
     devs_cmd = {"cmd": "devs", "token": DEFAULT_TOKEN}
-    for cmd in [summary_cmd, devs_cmd]:
+    for cmd in (summary_cmd, devs_cmd):
         resp = send_tcp_json(ip, port, cmd)
         if resp:
             any_response = True
-            responses[cmd["cmd"]] = resp
+            # map by command name
+            try:
+                responses[cmd["cmd"]] = resp
+            except Exception:
+                # fallback: inspect keys
+                if isinstance(resp, dict) and "SUMMARY" in resp:
+                    responses["summary"] = resp
+                elif isinstance(resp, dict) and "DEVS" in resp:
+                    responses["devs"] = resp
     if not any_response:
         return result
     result["alive"] = True
     if "summary" in responses:
         summary = parse_summary(responses["summary"])
-        result.update(
-            {
-                "hashrate": summary.get("hashrate"),
-                "uptime": summary.get("uptime"),
-                "power": summary.get("power"),
-            }
-        )
+        result["hashrate"] = summary.get("hashrate")
+        result["uptime"] = summary.get("uptime")
+        result["power"] = summary.get("power")
     if "devs" in responses:
-        boards = parse_devs(responses["devs"])
-        result["board_temps"] = boards
+        result["board_temps"] = parse_devs(responses["devs"])
     return result
 
-# === Login Report ===
+def build_miners():
+    """
+    Build miners list from MINER_IP (same IP) and MINER_NAMES/PORTS.
+    If MINER_IP is not set, returns empty list.
+    """
+    ip = MINER_IP
+    miners = []
+    for name, port in zip(MINER_NAMES, MINER_PORTS):
+        miners.append({"name": name, "ip": ip, "port": port})
+    return miners
+
+def get_live_data():
+    miners = build_miners() if MINER_IP else []
+    out = []
+    if not miners:
+        return []
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        futures = {ex.submit(poll_miner, m): m for m in miners}
+        for fut in futures:
+            try:
+                res = fut.result()
+            except Exception:
+                m = futures[fut]
+                res = {"name": f"{m['name']} ({m['port']})", "alive": False}
+            out.append(res)
+    return sorted(out, key=lambda x: x["name"])
+
+def calculate_total_hashrate(miners):
+    total = 0.0
+    for miner in miners:
+        if miner.get("alive") and miner.get("hashrate") is not None:
+            try:
+                total += float(miner["hashrate"])
+            except Exception:
+                continue
+    return round(total, 2)
+
+# === LOGIN / WEEK REPORT ===
 def get_current_saturday():
     tz = pytz.timezone("Asia/Tehran")
     now = datetime.now(tz)
     j_now = jdatetime.datetime.fromgregorian(datetime=now)
+    # j_now.weekday(): Monday=0.. in jdatetime it aligns differently; we use weekday to subtract to Saturday
+    # In jdatetime, weekday(): Saturday==0? to be safe compute using isoweekday:
+    # We'll compute saturday as the start of the Jalali week (same approach as before)
     days_since_saturday = j_now.weekday()
     current_saturday = j_now - timedelta(days=days_since_saturday)
     return current_saturday.strftime("%Y/%m/%d")
@@ -179,7 +266,7 @@ def should_record_login():
     if login_data["last_login_time"] is None:
         return True
     time_diff = current_time - login_data["last_login_time"]
-    return time_diff.total_seconds() >= 300
+    return time_diff.total_seconds() >= 300  # 5 minutes
 
 def update_login_data():
     if not should_record_login():
@@ -220,37 +307,14 @@ def get_week_report():
         tree_report["days"].append(day_data)
     return tree_report
 
-# === LIVE DATA ===
-def get_live_data():
-    miners = build_miners() if MINER_IP else []
-    out = []
-    if not miners:
-        return []
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
-        futures = {ex.submit(poll_miner, m): m for m in miners}
-        for fut in futures:
-            try:
-                res = fut.result()
-            except Exception:
-                res = {"name": f"{futures[fut]['name']} ({futures[fut]['port']})", "alive": False}
-            out.append(res)
-    return sorted(out, key=lambda x: x["name"])
-
-def calculate_total_hashrate(miners):
-    total = 0
-    for miner in miners:
-        if miner.get("alive") and miner.get("hashrate") is not None:
-            total += miner["hashrate"]
-    return round(total, 2)
-
-# === SITE / FLASK ===
-# خودت این قسمت رو جایگذاری کن 
-# === Flask UI ===
-app = Flask(__name__)
+# === FLASK SITE ===
+# Below is the UI template used previously; you can replace or integrate in your app.
+# I'm including it so this module is runnable out-of-the-box. If you prefer to place
+# your own Flask UI elsewhere, replace TEMPLATE and routes accordingly.
 
 TEMPLATE = """
 <!doctype html>
-<html lang="en" dir="ltr">
+<html lang="fa" dir="rtl">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -433,31 +497,26 @@ window.onclick = function(event) {
 </html>
 """
 
+app = Flask(__name__)
+
 @app.route("/", methods=["GET", "POST"])
 def index():
-    # فقط وقتی صفحه رفرش می‌شود لاگین ثبت شود
     update_login_data()
     miners = get_live_data()
     total_hashrate = calculate_total_hashrate(miners)
-    return render_template_string(
-        TEMPLATE,
-        miners=miners,
-        total_hashrate=total_hashrate,
-    )
+    return render_template_string(TEMPLATE, miners=miners, total_hashrate=total_hashrate)
 
 @app.route("/get_login_report")
 def get_login_report():
     try:
-        # این endpoint فقط گزارش می‌دهد، لاگین جدید ثبت نمی‌کند
         week_report = get_week_report()
         return jsonify(week_report)
     except Exception as e:
         print(f"Error in get_login_report: {e}")
-        return jsonify({
-            "saturday": "Error",
-            "days": []
-        })
+        return jsonify({"saturday": "Error", "days": []})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    host = "0.0.0.0"
+    print(f"Starting miner panel on http://{host}:{port} (MINER_IP={MINER_IP})")
+    app.run(host=host, port=port, debug=False)
