@@ -10,10 +10,22 @@ import pytz
 from flask import Flask, render_template_string, request, jsonify
 import jdatetime
 
+app = Flask(__name__)
+
 # === CONFIG ===
 MINER_IP = os.environ.get("MINER_IP")
 MINER_NAMES = ["131", "132", "133", "65", "66", "70"]
 MINER_PORTS = [204, 205, 206, 304, 305, 306]
+
+# Map name -> port (سراسری، روابط لینک‌ها به این پورت‌ها خواهد بود)
+port_map = {
+    "131": 201,
+    "132": 202,
+    "133": 203,
+    "65": 301,
+    "66": 302,
+    "70": 303
+}
 
 # Login storage - ساختار جدید
 login_data = {
@@ -22,16 +34,16 @@ login_data = {
     "last_login_time": None    # آخرین زمان ثبت لاگین
 }
 
+SOCKET_TIMEOUT = 3.0
+MAX_WORKERS = 6
+COMMANDS = [{"command": "summary"}, {"command": "devs"}]
+
 def build_miners():
     ip = MINER_IP
     miners = []
     for name, port in zip(MINER_NAMES, MINER_PORTS):
         miners.append({"name": name, "ip": ip, "port": port})
     return miners
-
-SOCKET_TIMEOUT = 3.0
-MAX_WORKERS = 6
-COMMANDS = [{"command": "summary"}, {"command": "devs"}]
 
 # === TCP JSON sender ===
 def send_tcp_json(ip, port, payload):
@@ -162,100 +174,67 @@ def poll_miner(miner):
         result["board_temps"] = boards
     return result
 
-# === Login Report ===
+# === Login Report functions ===
 def get_current_saturday():
-    """پیدا کردن شنبه هفته جاری بر اساس تقویم جلالی"""
     tz = pytz.timezone("Asia/Tehran")
     now = datetime.now(tz)
     j_now = jdatetime.datetime.fromgregorian(datetime=now)
-    
-    # پیدا کردن شنبه (روز 0 در هفته جلالی)
     days_since_saturday = j_now.weekday()
     current_saturday = j_now - timedelta(days=days_since_saturday)
-    
     return current_saturday.strftime("%Y/%m/%d")
 
 def should_record_login():
-    """بررسی کند آیا باید لاگین جدید ثبت شود یا نه"""
     tz = pytz.timezone("Asia/Tehran")
     current_time = datetime.now(tz)
-    
-    # اگر اولین لاگین است
     if login_data["last_login_time"] is None:
         return True
-    
-    # بررسی فاصله زمانی - حداقل 5 دقیقه
     time_diff = current_time - login_data["last_login_time"]
-    return time_diff.total_seconds() >= 300  # 300 ثانیه = 5 دقیقه
+    return time_diff.total_seconds() >= 300
 
 def update_login_data():
-    """آپدیت داده‌های لاگین فقط در صورت نیاز"""
     if not should_record_login():
         return
-    
     tz = pytz.timezone("Asia/Tehran")
     current_time = datetime.now(tz)
     j_current = jdatetime.datetime.fromgregorian(datetime=current_time)
     current_date = j_current.strftime("%Y/%m/%d")
     current_time_str = j_current.strftime("%H:%M:%S")
-    
-    # بررسی آیا شنبه جدید شده؟
     current_saturday = get_current_saturday()
-    
     if login_data["current_saturday"] != current_saturday:
-        # شنبه جدید - پاک کردن داده‌های قدیم و شروع جدید
         login_data["current_week"] = {}
         login_data["current_saturday"] = current_saturday
-    
-    # اضافه کردن لاگین جدید
     if current_date not in login_data["current_week"]:
         login_data["current_week"][current_date] = []
-    
-    # اضافه کردن زمان اگر تکراری نیست
     if current_time_str not in login_data["current_week"][current_date]:
         login_data["current_week"][current_date].append(current_time_str)
         login_data["current_week"][current_date].sort()
-    
-    # آپدیت آخرین زمان لاگین
     login_data["last_login_time"] = current_time
 
 def get_week_report():
-    """گزارش هفته جاری به صورت درختی"""
-    # این تابع فقط گزارش می‌دهد، لاگین جدید ثبت نمی‌کند
     week_days_persian = ["شنبه", "یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه", "جمعه"]
-    
-    # ساختار درختی برای گزارش
     tree_report = {
         "saturday": login_data["current_saturday"] or get_current_saturday(),
         "days": []
     }
-    
-    # تولید روزهای هفته از شنبه تا جمعه
     current_saturday = jdatetime.datetime.strptime(tree_report["saturday"], "%Y/%m/%d")
-    
     for i in range(7):
         current_date = current_saturday + timedelta(days=i)
         date_str = current_date.strftime("%Y/%m/%d")
         day_name = week_days_persian[i]
-        
         day_data = {
             "date": date_str,
             "day_name": day_name,
             "logins": login_data["current_week"].get(date_str, []),
             "count": len(login_data["current_week"].get(date_str, []))
         }
-        
         tree_report["days"].append(day_data)
-    
     return tree_report
 
-# === LIVE DATA ===
 def get_live_data():
     miners = build_miners() if MINER_IP else []
     out = []
     if not miners:
         return []
-    
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
         futures = {ex.submit(poll_miner, m): m for m in miners}
         for fut in futures:
@@ -273,9 +252,7 @@ def calculate_total_hashrate(miners):
             total += miner["hashrate"]
     return round(total, 2)
 
-# === Flask UI ===
-app = Flask(__name__)
-
+# === FULL TEMPLATE (HTML/CSS/JS) ===
 TEMPLATE = """
 <!doctype html>
 <html lang="en" dir="ltr">
@@ -313,6 +290,11 @@ tr:nth-child(even){background:#f8fafc;}
 .tree-time{margin:2px 0; padding:3px 8px; background:white; border-radius:4px; font-family:monospace;}
 .expand-btn{background:none; border:none; font-size:16px; cursor:pointer; margin-left:10px;}
 .week-title{text-align:center; color:#2c3e50; margin-bottom:15px; padding:10px; background:#e8f5e8; border-radius:8px;}
+/* تغییرات رنگ هش‌ریت و آپ‌تایم */
+.hash-low{color:#dc2626; font-weight:bold;}   /* هش‌ریت زیر 60 قرمز */
+.hash-normal{color:#16a34a; font-weight:bold;} /* هش‌ریت >= 60 سبز */
+.uptime-new{color:#1d4ed8; font-weight:bold;}   /* آپ‌تایم زیر 1 روز آبی */
+.uptime-old{color:#16a34a; font-weight:bold;}   /* آپ‌تایم >= 1 روز سبز */
 @media(max-width:600px){th,td{font-size:16px;padding:8px;}}
 </style>
 </head>
@@ -344,14 +326,53 @@ tr:nth-child(even){background:#f8fafc;}
 {% for m in miners %}
 <tr>
 <td>
-{{ m.name }}
+<!-- لینک اصلاح شده: با استفاده از port_map سراسری و fallback به m.port -->
+<a href="http://{{ MINER_IP }}:{{ port_map.get(m.name.split(' ')[0], m.port) }}" target="_blank">{{ m.name }}</a>
+
 {% if m.alive %}
 <span class="status-online">Online</span>
 {% else %}
 <span class="status-offline">Offline</span>
 {% endif %}
 </td>
-<td>{{ m.uptime or "-" }}</td>
+
+<!-- Uptime -->
+<td>
+{% if m.uptime %}
+    {% set uptime_sec = 0 %}
+    {% if 'd' in m.uptime %}
+        {% set parts = m.uptime.split('d') %}
+        {% set uptime_sec = (parts[0] | int) * 86400 %}
+        {% if 'h' in parts[1] %}
+            {% set h_parts = parts[1].split('h') %}
+            {% set uptime_sec = uptime_sec + (h_parts[0]|int)*3600 %}
+            {% if 'm' in h_parts[1] %}
+                {% set m_parts = h_parts[1].split('m') %}
+                {% set uptime_sec = uptime_sec + (m_parts[0]|int)*60 %}
+            {% endif %}
+        {% endif %}
+    {% elif 'h' in m.uptime %}
+        {% set h_parts = m.uptime.split('h') %}
+        {% set uptime_sec = (h_parts[0]|int)*3600 %}
+        {% if 'm' in h_parts[1] %}
+            {% set m_parts = h_parts[1].split('m') %}
+            {% set uptime_sec = uptime_sec + (m_parts[0]|int)*60 %}
+        {% endif %}
+    {% elif 'm' in m.uptime %}
+        {% set uptime_sec = (m.uptime.split('m')[0]|int)*60 %}
+    {% endif %}
+    
+    {% if uptime_sec < 86400 %}
+        <span class="uptime-new">{{ m.uptime }}</span>
+    {% else %}
+        <span class="uptime-old">{{ m.uptime }}</span>
+    {% endif %}
+{% else %}
+    -
+{% endif %}
+</td>
+
+<!-- Temperature -->
 <td>
 {% if m.board_temps %}
 <div class="temp-container">
@@ -367,7 +388,20 @@ tr:nth-child(even){background:#f8fafc;}
 -
 {% endif %}
 </td>
-<td>{{ m.hashrate or "-" }}</td>
+
+<!-- Hashrate -->
+<td>
+{% if m.hashrate %}
+  {% if m.hashrate < 60 %}
+    <span class="hash-low">{{ m.hashrate }}</span>
+  {% else %}
+    <span class="hash-normal">{{ m.hashrate }}</span>
+  {% endif %}
+{% else %}
+  -
+{% endif %}
+</td>
+
 <td>{{ m.power or "-" }}</td>
 </tr>
 {% endfor %}
@@ -461,9 +495,10 @@ window.onclick = function(event) {
 </html>
 """
 
+# === ROUTES ===
 @app.route("/", methods=["GET", "POST"])
 def index():
-    # فقط وقتی صفحه رفرش می‌شود لاگین ثبت شود
+    # ثبت لاگین فقط در صورت رفرش/باز شدن صفحه
     update_login_data()
     miners = get_live_data()
     total_hashrate = calculate_total_hashrate(miners)
@@ -471,21 +506,19 @@ def index():
         TEMPLATE,
         miners=miners,
         total_hashrate=total_hashrate,
+        MINER_IP=MINER_IP or "127.0.0.1",
+        port_map=port_map
     )
 
 @app.route("/get_login_report")
 def get_login_report():
     try:
-        # این endpoint فقط گزارش می‌دهد، لاگین جدید ثبت نمی‌کند
         week_report = get_week_report()
         return jsonify(week_report)
     except Exception as e:
         print(f"Error in get_login_report: {e}")
-        return jsonify({
-            "saturday": "Error",
-            "days": []
-        })
+        return jsonify({"saturday": "Error", "days": []})
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 8000))
     app.run(host="0.0.0.0", port=port, debug=False)
