@@ -277,7 +277,13 @@ tr:nth-child(even){background:#f8fafc;}
 .total-hashrate{background:#e0e7ff; padding:8px 16px; border-radius:8px; font-weight:bold; font-size:16px; color:#1e40af;}
 .control-row{display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; gap:15px;}
 .control-left{display:flex; align-items:center; gap:15px;}
-.modal{display:none;position:fixed;top:50%;left:50%;transform:translate(-50%, -50%);background:white;padding:20px;border:3px solid #2ecc71;border-radius:10px;box-shadow:0 0 20px rgba(0,0,0,0.3);z-index:1000;width:90%;max-width:600px;max-height:80vh;overflow-y:auto;}
+/* icon bar */
+.icon-bar { display:flex; gap:10px; align-items:center; }
+.icon-btn { background:#2563eb; border:none; color:white; border-radius:8px; font-size:18px; padding:8px 10px; cursor:pointer; transition:all .15s ease; }
+.icon-btn:hover { background:#1e40af; transform:scale(1.05); }
+
+/* modal */
+.modal{display:none;position:fixed;top:50%;left:50%;transform:translate(-50%, -50%);background:white;padding:20px;border:3px solid #2ecc71;border-radius:10px;box-shadow:0 0 20px rgba(0,0,0,0.3);z-index:1000;width:90%;max-width:800px;max-height:80vh;overflow-y:auto;}
 .modal-overlay{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:999;}
 .report-btn{background:#9b59b6;color:white;padding:10px 15px;border:none;border-radius:8px;cursor:pointer;font-size:18px;}
 .report-btn:hover{background:#8e44ad;}
@@ -296,15 +302,20 @@ tr:nth-child(even){background:#f8fafc;}
 .uptime-new{color:#1d4ed8; font-weight:bold;}   /* آپ‌تایم زیر 1 روز آبی */
 .uptime-old{color:#16a34a; font-weight:bold;}   /* آپ‌تایم >= 1 روز سبز */
 @media(max-width:600px){th,td{font-size:16px;padding:8px;}}
+/* terminal pre */
+.terminal-pre { background:#0b1220; color:#00ff88; padding:10px; height:300px; overflow:auto; border-radius:8px; font-family:monospace; font-size:13px; white-space:pre-wrap; }
 </style>
 </head>
 <body>
 <div class="card">
 <div class="control-row">
     <div class="control-left">
-        <form method="POST" action="/">
-            <button type="submit" class="button">Refresh</button>
-        </form>
+        <div class="icon-bar">
+            <button class="icon-btn" onclick="openTerminal()" title="ترمینال">💻</button>
+            <!-- placeholder for future icons -->
+            <button class="icon-btn" title="آپدیت" onclick="location.reload();">🔄</button>
+            <button class="icon-btn" title="تنظیمات">⚙️</button>
+        </div>
         <div class="total-hashrate">
             Total Hashrate: {{ total_hashrate }} TH/s
         </div>
@@ -409,6 +420,29 @@ tr:nth-child(even){background:#f8fafc;}
 </table>
 </div>
 
+<!-- Terminal modal -->
+<div id="terminalOverlay" class="modal-overlay" onclick="closeTerminal()"></div>
+<div id="terminalModal" class="modal" aria-hidden="true">
+    <h3>💻 ترمینال ماینر</h3>
+    <div style="display:flex; gap:10px; justify-content:center; margin-bottom:10px; flex-wrap:wrap;">
+        <input id="minerInput" list="minersList" type="text" placeholder="مثلاً 131" style="padding:8px; width:110px; border-radius:6px; border:1px solid #ccc;">
+        <datalist id="minersList">
+            {% for n in MINER_NAMES %}
+            <option value="{{ n }}"></option>
+            {% endfor %}
+        </datalist>
+        <select id="cmdInput" style="padding:8px; border-radius:6px; border:1px solid #ccc;">
+            <option value="summary">summary</option>
+            <option value="devs">devs</option>
+        </select>
+        <button class="button" onclick="sendCommand()">Run</button>
+    </div>
+    <div id="terminalOutput" class="terminal-pre">Ready.</div>
+    <div style="text-align:center; margin-top:10px;">
+        <button onclick="closeTerminal()" style="background:#e74c3c; color:white; padding:8px 16px; border:none; border-radius:6px;">❌ بستن</button>
+    </div>
+</div>
+
 <div id="modalOverlay" class="modal-overlay" onclick="closeModal()"></div>
 <div id="reportModal" class="modal">
     <h3>📋 گزارش ورودهای هفته جاری</h3>
@@ -490,6 +524,51 @@ window.onclick = function(event) {
         closeModal();
     }
 }
+
+// Terminal functions
+function openTerminal(){
+  document.getElementById('terminalOverlay').style.display='block';
+  document.getElementById('terminalModal').style.display='block';
+  document.getElementById('terminalOutput').textContent='⏳ Ready...';
+  document.getElementById('terminalModal').setAttribute('aria-hidden','false');
+}
+function closeTerminal(){
+  document.getElementById('terminalOverlay').style.display='none';
+  document.getElementById('terminalModal').style.display='none';
+  document.getElementById('terminalModal').setAttribute('aria-hidden','true');
+}
+
+function sendCommand(){
+  const miner = document.getElementById('minerInput').value.trim();
+  const cmd = document.getElementById('cmdInput').value;
+  const output = document.getElementById('terminalOutput');
+  
+  if (!miner) {
+    output.textContent = "⚠️ لطفاً نام ماینر را وارد کنید (مثلاً 131).";
+    return;
+  }
+
+  output.textContent = "⏳ در حال اجرا...";
+  
+  fetch('/terminal_command', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({miner, cmd})
+  })
+  .then(r=>r.json())
+  .then(data=>{
+      if(data.output){
+          output.textContent = data.output;
+      } else if(data.error){
+          output.textContent = "❌ " + data.error;
+      } else {
+          output.textContent = "❌ پاسخ نامعتبر";
+      }
+  })
+  .catch(err=>{
+      output.textContent = "⚠️ خطا در اتصال: " + err;
+  });
+}
 </script>
 </body>
 </html>
@@ -507,8 +586,52 @@ def index():
         miners=miners,
         total_hashrate=total_hashrate,
         MINER_IP=MINER_IP or "127.0.0.1",
-        port_map=port_map
+        port_map=port_map,
+        MINER_NAMES=MINER_NAMES
     )
+
+@app.route("/terminal_command", methods=["POST"])
+def terminal_command():
+    try:
+        data = request.get_json() or {}
+        miner_name = data.get("miner")
+        cmd = data.get("cmd")
+
+        if not miner_name:
+            return jsonify({"error": "No miner provided"})
+
+        # support when user passes "131 (204)" or "131 (201)" or "131"
+        # try to extract the numeric prefix
+        miner_key = miner_name.split()[0]
+        # fallback: if miner_key contains parentheses, strip them
+        miner_key = miner_key.strip()
+        if miner_key not in port_map:
+            # try to find direct match among MINER_NAMES (loose match)
+            found = None
+            for k in port_map.keys():
+                if miner_key == k or miner_name.startswith(k) or k in miner_name:
+                    found = k
+                    break
+            if found:
+                miner_key = found
+            else:
+                return jsonify({"error": "Miner not found"})
+
+        # ==== اینجا اصلاح اصلی: استفاده از MINER_PORTS ====
+        ip = MINER_IP
+        idx = MINER_NAMES.index(miner_key)  # پیدا کردن ایندکس ماینر
+        port = MINER_PORTS[idx]              # استفاده از پورت اصلی ماینر
+        payload = {"command": cmd}
+        response = send_tcp_json(ip, port, payload)
+
+        if not response:
+            return jsonify({"error": "No response"})
+
+        formatted = json.dumps(response, indent=2, ensure_ascii=False)
+        return jsonify({"output": formatted})
+
+    except Exception as e:
+        return jsonify({"error": str(e)})
 
 @app.route("/get_login_report")
 def get_login_report():
