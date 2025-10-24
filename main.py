@@ -538,11 +538,6 @@ function closeTerminal(){
   document.getElementById('terminalModal').setAttribute('aria-hidden','true');
 }
 
-</script>
-</body>
-</html>
-"""
-JS_SEND_COMMAND = r"""
 function sendCommand(){
     const miner = document.getElementById('minerInput').value.trim();
     const cmd = document.getElementById('cmdInput').value;
@@ -567,14 +562,11 @@ function sendCommand(){
                 .replace(/&/g, '&amp;')
                 .replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;')
-                // کلیدها سبز
-                .replace(/("(\\\\u[a-zA-Z0-9]{4}|\\\\[^u]|[^\\\\"])*")(\\s*):/g, '<span style="color:green;">$1</span>$3:')
-                // مقادیر قرمز
-                .replace(/:\\s*("(\\\\u[a-zA-Z0-9]{4}|\\\\[^u]|[^\\\\"])*"|[\\d.eE+-]+)/g, ': <span style="color:red;">$1</span>')
-                // براکت‌ها آبی
-                .replace(/([{}\\[\\]\\(\\)])/g, '<span style="color:blue;">$1</span>');
+                .replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*")(\s*):/g, '<span style="color:green;">$1</span>$3:')
+                .replace(/:\s*("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"|[\d.eE+-]+)/g, ': <span style="color:red;">$1</span>')
+                .replace(/([{}\[\]\(\)])/g, '<span style="color:blue;">$1</span>');
 
-            output.innerHTML = '<pre class="terminal-pre" style="background:#000;color:#fff;padding:10px;border-radius:10px;">' + formatted + '</pre>';
+            output.innerHTML = '<pre class="terminal-pre">' + formatted + '</pre>';
         } else if(data.error){
             output.textContent = "❌ " + data.error;
         } else {
@@ -585,8 +577,11 @@ function sendCommand(){
         output.textContent = "⚠️ خطا در اتصال: " + err;
     });
 }
-"""
+</script>
+</body>
+</html>
 
+"""
 # === ROUTES ===
 @app.route("/", methods=["GET", "POST"])
 def index():
