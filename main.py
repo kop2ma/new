@@ -327,7 +327,7 @@ tr:nth-child(even){background:#f8fafc;}
 <tr>
 <td>
 <!-- لینک اصلاح شده: با استفاده از port_map سراسری و fallback به m.port -->
-<a href="http://{{ MINER_IP }}:{{ port_map.get(m.name.split(' ')[0], m.port) }}" target="_blank">{{ m.name }}</a>
+<a href="https://{{ MINER_IP }}:{{ port_map.get(m.name.split(' ')[0], m.port) }}" target="_blank">{{ m.name }}</a>
 
 {% if m.alive %}
 <span class="status-online">Online</span>
