@@ -538,40 +538,53 @@ function closeTerminal(){
   document.getElementById('terminalModal').setAttribute('aria-hidden','true');
 }
 
-function sendCommand(){
-  const miner = document.getElementById('minerInput').value.trim();
-  const cmd = document.getElementById('cmdInput').value;
-  const output = document.getElementById('terminalOutput');
-  
-  if (!miner) {
-    output.textContent = "⚠️ لطفاً نام ماینر را وارد کنید (مثلاً 131).";
-    return;
-  }
-
-  output.textContent = "⏳ در حال اجرا...";
-  
-  fetch('/terminal_command', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({miner, cmd})
-  })
-  .then(r=>r.json())
-  .then(data=>{
-      if(data.output){
-          output.textContent = data.output;
-      } else if(data.error){
-          output.textContent = "❌ " + data.error;
-      } else {
-          output.textContent = "❌ پاسخ نامعتبر";
-      }
-  })
-  .catch(err=>{
-      output.textContent = "⚠️ خطا در اتصال: " + err;
-  });
-}
 </script>
 </body>
 </html>
+"""
+JS_SEND_COMMAND = r"""
+function sendCommand(){
+    const miner = document.getElementById('minerInput').value.trim();
+    const cmd = document.getElementById('cmdInput').value;
+    const output = document.getElementById('terminalOutput');
+
+    if (!miner) {
+        output.textContent = "⚠️ لطفاً نام ماینر را وارد کنید (مثلاً 131).";
+        return;
+    }
+
+    output.textContent = "⏳ در حال اجرا...";
+
+    fetch('/terminal_command', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({miner, cmd})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if(data.output){
+            let formatted = data.output
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                // کلیدها سبز
+                .replace(/("(\\\\u[a-zA-Z0-9]{4}|\\\\[^u]|[^\\\\"])*")(\\s*):/g, '<span style="color:green;">$1</span>$3:')
+                // مقادیر قرمز
+                .replace(/:\\s*("(\\\\u[a-zA-Z0-9]{4}|\\\\[^u]|[^\\\\"])*"|[\\d.eE+-]+)/g, ': <span style="color:red;">$1</span>')
+                // براکت‌ها آبی
+                .replace(/([{}\\[\\]\\(\\)])/g, '<span style="color:blue;">$1</span>');
+
+            output.innerHTML = '<pre class="terminal-pre" style="background:#000;color:#fff;padding:10px;border-radius:10px;">' + formatted + '</pre>';
+        } else if(data.error){
+            output.textContent = "❌ " + data.error;
+        } else {
+            output.textContent = "❌ پاسخ نامعتبر";
+        }
+    })
+    .catch(err => {
+        output.textContent = "⚠️ خطا در اتصال: " + err;
+    });
+}
 """
 
 # === ROUTES ===
